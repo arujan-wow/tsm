@@ -274,8 +274,8 @@ def _tier_section(label, price_range, color, items):
     return f"""
 <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
   <tr><td style="padding:12px 16px;background:{color};border-radius:8px 8px 0 0;">
-    <span style="color:{C['bright']};font-weight:700;font-size:16px;">{label}</span>
-    <span style="color:{C['text']};font-size:13px;margin-left:8px;">({price_range})</span>
+    <span style="color:{C['bright']};font-weight:700;font-size:16px;font-family:'Cinzel',Georgia,serif;">{label}</span>
+    <span style="color:{C['text']};font-size:13px;margin-left:8px;font-family:'Cinzel',Georgia,serif;">({price_range})</span>
   </td></tr>
   <tr><td style="padding:0;">
     <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['card_bg']};border-radius:0 0 8px 8px;">
@@ -301,8 +301,8 @@ def _top_pick_card(item):
     <table width="100%" cellpadding="0" cellspacing="0">
       <tr>
         <td style="vertical-align:top;">
-          <p style="color:{C['accent']};font-size:12px;text-transform:uppercase;letter-spacing:2px;margin:0 0 4px 0;">Top Pick of the Day</p>
-          <p style="color:{C['bright']};font-size:28px;font-weight:700;margin:0 0 6px 0;">{item['name']}</p>
+          <p style="color:{C['accent']};font-size:12px;text-transform:uppercase;letter-spacing:2px;margin:0 0 4px 0;font-family:'Cinzel',Georgia,serif;">Top Pick of the Day</p>
+          <p style="color:{C['bright']};font-size:28px;font-weight:900;margin:0 0 6px 0;font-family:'Cinzel Decorative','Cinzel',Georgia,serif;">{item['name']}</p>
           <p style="color:{C['muted']};font-size:14px;margin:0 0 16px 0;">{item['expansion']} &middot; {item['zone']}</p>
           <table cellpadding="0" cellspacing="0"><tr>
             <td style="background:{C['body_bg']};border-radius:8px;padding:10px 18px;margin-right:12px;">
@@ -356,21 +356,23 @@ def generate_html(results, date_str):
     top_pick = by_gold_hr[0] if by_gold_hr else None
 
     html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:{C['body_bg']};font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Cinzel+Decorative:wght@700;900&display=swap" rel="stylesheet">
+</head>
+<body style="margin:0;padding:0;background:{C['body_bg']};font-family:'Cinzel',Georgia,'Times New Roman',serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['body_bg']};">
 <tr><td align="center" style="padding:0;">
 <table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
 
   <!-- HEADER BANNER -->
-  <tr><td style="padding:0;position:relative;">
-    <img src="{HEADER_IMG}" width="640" style="width:100%;max-width:640px;height:auto;display:block;border-radius:12px 12px 0 0;" alt="Earthen Dwarves Morning Ore Report">
+  <tr><td align="center" style="padding:0;margin:0;line-height:0;font-size:0;">
+    <img src="{HEADER_IMG}" width="640" align="center" style="width:100%;max-width:640px;height:auto;display:block;border-radius:12px 12px 0 0;margin:0 auto;" alt="Earthen Dwarves Morning Ore Report">
   </td></tr>
 
   <!-- TITLE BAR -->
   <tr><td style="background:{C['container_bg']};padding:24px 28px 20px 28px;">
-    <p style="color:{C['bright']};font-size:26px;font-weight:700;margin:0 0 4px 0;">Daily Ore Report</p>
-    <p style="color:{C['muted']};font-size:14px;margin:0;">{date_str} &middot; {REALM_DISPLAY} &middot; Source: wowpricehub.com</p>
+    <p style="color:{C['gold']};font-size:28px;font-weight:900;margin:0 0 4px 0;font-family:'Cinzel Decorative','Cinzel',Georgia,serif;letter-spacing:1px;">Daily Ore Report</p>
+    <p style="color:{C['muted']};font-size:13px;margin:0;font-family:'Cinzel',Georgia,serif;">{date_str} &middot; {REALM_DISPLAY} &middot; Source: wowpricehub.com</p>
   </td></tr>
 
   <!-- CONTENT -->
@@ -386,7 +388,7 @@ def generate_html(results, date_str):
     <!-- TOP 5 FARMING PICKS -->
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
       <tr><td style="padding:12px 16px;background:{C['accent']};border-radius:8px 8px 0 0;">
-        <span style="color:{C['body_bg']};font-weight:700;font-size:16px;">Top 5 Farming Picks (by Gold/Hr)</span>
+        <span style="color:{C['body_bg']};font-weight:700;font-size:16px;font-family:'Cinzel',Georgia,serif;">Top 5 Farming Picks (by Gold/Hr)</span>
       </td></tr>
       <tr><td style="padding:8px 0;">
         <table width="100%" cellpadding="0" cellspacing="0">

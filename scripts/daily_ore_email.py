@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""Daily WoW Ore Report — fetches live prices from wowpricehub.com and emails a styled report via Outlook."""
+
+import requests
+from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parent.parent
+ORE_DB_PATH = REPO_ROOT / "references" / "ore-database.md"
+REALM = "us/area-52"
+REALM_DISPLAY = "US — Area 52"
+EMAIL_TO = "ian@herzingsmartsheet.consulting"
+HEADER_IMG = "https://raw.githubusercontent.com/arujan-wow/tsm/main/assets/header-banner.png"
+MAX_WORKERS = 6
+
+# ---------------------------------------------------------------------------
+# Parse ore-database.md
+# ---------------------------------------------------------------------------
+def parse_ore_database(filepath):
+    """Parse the markdown ore database into a list of ore dicts."""
+    text = filepath.read_text(encoding="utf-8")
+    ores = []
+    current_expansion = ""
+
+    # Match expansion headings (## Classic, ## The Burning Crusade, etc.)
+    lines = text.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Track expansion headings
+        if line.startswith("## ") and not line.startswith("## URL") and not line.startswith("## Quick") and not line.startswith("## Gold"):
+            current_expansion = line[3:].strip()
+            # Shorten display names
+            exp_map = {
+                "Classic": "Classic",
+                "The Burning Crusade": "TBC",
+                "Wrath of the Lich King": "WotLK",
+                "Cataclysm": "Cata",
+                "Mists of Pandaria": "MoP",
+                "Warlords of Draenor": "WoD",
+                "Legion": "Legion",
+                "Battle for Azeroth": "BFA",
+                "Shadowlands": "SL",
+                "Dragonflight": "DF",
+                "The War Within": "TWW",
+                "Midnight (NEW)": "Midnight",
+            }
+            current_expansion = exp_map.get(current_expansion, current_expansion)
+
+        # Parse table rows (skip header and separator rows)
+        if line.startswith("|") and not line.startswith("| Ore") and not line.startswith("|--"):
+            cols = [c.strip() for c in line.split("|")[1:-1]]
+            if len(cols) >= 6 and current_expansion:
+                name = cols[0]
+                try:
+                    item_id = int(cols[1])
+                except ValueError:
+                    i += 1
+                    continue
+                zone = cols[2]
+                # Parse ranges like "50-70" → midpoint
+                nodes_hr = _parse_range(cols[3])
+                ore_node = _parse_range(cols[4])
+                notes = cols[5] if len(cols) > 5 else ""
+                if nodes_hr and ore_node:
+                    ores.append({
+                        "name": name,
+                        "id": item_id,
+                        "expansion": current_expansion,
+                        "zone": zone,
+                        "nodes_hr": nodes_hr,
+                        "ore_node": ore_node,
+                        "notes": notes,
+                    })
+        i += 1
+
+    return ores
+
+
+def _parse_range(text):
+    """Parse '50-70' → 60.0, or '8' → 8.0."""
+    m = re.match(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", text.strip())
+    if m:
+        return (float(m.group(1)) + float(m.group(2))) / 2
+    m2 = re.match(r"(\d+(?:\.\d+)?)", text.strip())
+    if m2:
+        return float(m2.group(1))
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Price fetching
+# ---------------------------------------------------------------------------
+def fetch_price(ore, realm):
+    """Fetch current price from wowpricehub.com. Returns float or None."""
+    url = f"https://wowpricehub.com/{realm}/item/{ore['name']}-{ore['id']}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Strategy 1: JSON-LD structured data
+        ld = soup.find("script", type="application/ld+json")
+        if ld and ld.string:
+            try:
+                data = json.loads(ld.string)
+                price_str = data.get("offers", {}).get("price", "")
+                pm = re.search(r"[\d,.]+", str(price_str))
+                if pm:
+                    return float(pm.group().replace(",", ""))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Strategy 2: meta description
+        meta = soup.find("meta", attrs={"name": "description"})
+        if meta:
+            content = meta.get("content", "")
+            pm = re.search(r"(?:Current price|Market value)[:\s]*([\d,.]+)\s*gold", content, re.I)
+            if pm:
+                return float(pm.group(1).replace(",", ""))
+
+        # Strategy 3: regex scan of full page text
+        text = soup.get_text(" ", strip=True)
+        # Look for patterns like "36.84 gold" near "Market Value" or "Current"
+        pm = re.search(r"(?:market value|current)[^\d]{0,30}([\d,.]+)\s*(?:gold|g)", text, re.I)
+        if pm:
+            return float(pm.group(1).replace(",", ""))
+
+        return None
+    except Exception:
+        return None
+
+
+def fetch_all_prices(ores, realm):
+    """Fetch prices for all ores in parallel. Returns list of result dicts."""
+    results = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        future_map = {pool.submit(fetch_price, ore, realm): ore for ore in ores}
+        for future in as_completed(future_map):
+            ore = future_map[future]
+            try:
+                price = future.result()
+            except Exception:
+                price = None
+            if price is not None and price > 0:
+                gold_hr = ore["nodes_hr"] * ore["ore_node"] * price
+                results.append({**ore, "price": price, "gold_hr": gold_hr})
+
+    results.sort(key=lambda x: x["price"], reverse=True)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# HTML email generation
+# ---------------------------------------------------------------------------
+TSM_COLORS = {
+    "body_bg": "#0a1628",
+    "container_bg": "#132238",
+    "card_bg": "#1a3050",
+    "accent": "#4db8ff",
+    "gold": "#ffd100",
+    "text": "#c7d5e0",
+    "bright": "#ffffff",
+    "muted": "#6b8299",
+    "tier1": "#ff6b6b",
+    "tier2": "#ffa726",
+    "tier3": "#66bb6a",
+    "tier4": "#78909c",
+    "row_alt": "#162a42",
+}
+C = TSM_COLORS
+
+
+def _tier_color(price):
+    if price >= 100:
+        return C["tier1"]
+    if price >= 15:
+        return C["tier2"]
+    if price >= 5:
+        return C["tier3"]
+    return C["tier4"]
+
+
+def _tier_label(price):
+    if price >= 100:
+        return "Premium", "100g+"
+    if price >= 15:
+        return "Profitable", "15 – 99g"
+    if price >= 5:
+        return "Moderate", "5 – 14g"
+    return "Budget", "Under 5g"
+
+
+def _format_gold(val):
+    if val >= 1000:
+        return f"{val:,.0f}g"
+    return f"{val:,.2f}g"
+
+
+def _reasoning(item):
+    """Generate a short reasoning blurb explaining the gold/hr math and trade-offs."""
+    nodes = item["nodes_hr"]
+    ore = item["ore_node"]
+    price = item["price"]
+    gold_hr = item["gold_hr"]
+
+    # Density assessment
+    if nodes >= 50:
+        density = "very dense spawns"
+    elif nodes >= 25:
+        density = "moderate spawns"
+    elif nodes >= 10:
+        density = "sparse spawns"
+    else:
+        density = "rare spawn"
+
+    # Build the math string
+    math = f"{nodes:.0f} nodes/hr x {ore:.1f} ore/node x {_format_gold(price)}"
+
+    # Trade-off insight
+    if price >= 100 and nodes < 15:
+        insight = "High unit price but rare — patient farmers only."
+    elif price >= 100:
+        insight = "Premium price with solid density. Top shelf."
+    elif gold_hr >= 4000:
+        insight = "Volume play — massive spawns offset lower price."
+    elif gold_hr >= 2000:
+        insight = "Strong balance of price and farmability."
+    elif nodes < 15:
+        insight = "Niche — grab when you see it, don't dedicate a session."
+    elif price < 5:
+        insight = "Low value per unit. Only worth it in bulk."
+    else:
+        insight = "Solid mid-tier pick for steady income."
+
+    return f"{math} = ~{_format_gold(gold_hr)}/hr. {insight}"
+
+
+def _tier_rows(items, tier_num):
+    """Generate table rows for a tier."""
+    rows = ""
+    for idx, item in enumerate(items):
+        bg = C["row_alt"] if idx % 2 == 0 else C["card_bg"]
+        tc = _tier_color(item["price"])
+        reason = _reasoning(item)
+        rows += f"""<tr style="background:{bg};">
+  <td style="padding:10px 14px;color:{C['muted']};font-size:13px;">{idx + 1}</td>
+  <td style="padding:10px 14px;color:{C['bright']};font-weight:600;">{item['name']}</td>
+  <td style="padding:10px 14px;color:{C['muted']};font-size:13px;">{item['expansion']}</td>
+  <td style="padding:10px 14px;color:{C['gold']};font-weight:700;font-size:15px;">{_format_gold(item['price'])}</td>
+  <td style="padding:10px 14px;color:{C['accent']};font-weight:600;">~{_format_gold(item['gold_hr'])}/hr</td>
+  <td style="padding:10px 14px;color:{C['text']};font-size:13px;">{item['zone']}</td>
+  <td style="padding:10px 14px;color:{C['muted']};font-size:12px;line-height:1.4;max-width:200px;">{reason}</td>
+</tr>\n"""
+    return rows
+
+
+def _tier_section(label, price_range, color, items):
+    if not items:
+        return ""
+    return f"""
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+  <tr><td style="padding:12px 16px;background:{color};border-radius:8px 8px 0 0;">
+    <span style="color:{C['bright']};font-weight:700;font-size:16px;">{label}</span>
+    <span style="color:{C['text']};font-size:13px;margin-left:8px;">({price_range})</span>
+  </td></tr>
+  <tr><td style="padding:0;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:{C['card_bg']};border-radius:0 0 8px 8px;">
+      <tr style="background:{C['body_bg']};">
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">#</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Ore</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Xpac</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Price</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Gold/Hr</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Farm Zone</th>
+        <th style="padding:8px 14px;color:{C['muted']};font-size:12px;text-align:left;font-weight:400;">Why</th>
+      </tr>
+      {_tier_rows(items, 0)}
+    </table>
+  </td></tr>
+</table>"""
+
+
+def _top_pick_card(item):
+    return f"""
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+  <tr><td style="background:linear-gradient(135deg,#1a3050,#0f3460);border:2px solid {C['accent']};border-radius:12px;padding:24px;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="vertical-align:top;">
+          <p style="color:{C['accent']};font-size:12px;text-transform:uppercase;letter-spacing:2px;margin:0 0 4px 0;">Top Pick of the Day</p>
+          <p style="color:{C['bright']};font-size:28px;font-weight:700;margin:0 0 6px 0;">{item['name']}</p>
+          <p style="color:{C['muted']};font-size:14px;margin:0 0 16px 0;">{item['expansion']} &middot; {item['zone']}</p>
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="background:{C['body_bg']};border-radius:8px;padding:10px 18px;margin-right:12px;">
+              <p style="color:{C['muted']};font-size:11px;margin:0;">Price</p>
+              <p style="color:{C['gold']};font-size:22px;font-weight:700;margin:2px 0 0 0;">{_format_gold(item['price'])}</p>
+            </td>
+            <td style="width:12px;"></td>
+            <td style="background:{C['body_bg']};border-radius:8px;padding:10px 18px;">
+              <p style="color:{C['muted']};font-size:11px;margin:0;">Est. Gold/Hr</p>
+              <p style="color:{C['accent']};font-size:22px;font-weight:700;margin:2px 0 0 0;">~{_format_gold(item['gold_hr'])}</p>
+            </td>
+          </tr></table>
+        </td>
+      </tr>
+      <tr><td style="padding-top:14px;">
+        <p style="color:{C['accent']};font-size:12px;font-weight:600;margin:0 0 4px 0;">The Math</p>
+        <p style="color:{C['text']};font-size:13px;margin:0;line-height:1.5;">{item['nodes_hr']:.0f} nodes/hr &times; {item['ore_node']:.1f} ore/node &times; {_format_gold(item['price'])} = <span style="color:{C['gold']};font-weight:700;">~{_format_gold(item['gold_hr'])}/hr</span></p>
+        <p style="color:{C['muted']};font-size:12px;margin:6px 0 0 0;font-style:italic;">{item.get('notes', '')}</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>"""
+
+
+def _farming_tips(top5):
+    tips = ""
+    for i, item in enumerate(top5):
+        tips += f"""
+<tr><td style="padding:14px 16px;background:{C['card_bg'] if i % 2 == 0 else C['row_alt']};border-radius:6px;margin-bottom:8px;">
+  <p style="color:{C['accent']};font-size:14px;font-weight:700;margin:0 0 4px 0;">{i+1}. {item['name']} — ~{_format_gold(item['gold_hr'])}/hr</p>
+  <p style="color:{C['text']};font-size:13px;margin:0;line-height:1.5;">
+    <span style="color:{C['gold']};">Zone:</span> {item['zone']}<br>
+    <span style="color:{C['gold']};">Math:</span> {item['nodes_hr']:.0f} nodes/hr &times; {item['ore_node']:.1f} ore/node &times; {_format_gold(item['price'])}<br>
+    <span style="color:{C['muted']};font-style:italic;">{_reasoning(item).split('. ', 1)[-1] if '. ' in _reasoning(item) else ''}</span>
+  </p>
+</td></tr>
+<tr><td style="height:6px;"></td></tr>"""
+    return tips
+
+
+def generate_html(results, date_str):
+    # Split into tiers
+    tier1 = [r for r in results if r["price"] >= 100]
+    tier2 = [r for r in results if 15 <= r["price"] < 100]
+    tier3 = [r for r in results if 5 <= r["price"] < 15]
+    tier4 = [r for r in results if r["price"] < 5]
+
+    # Top 5 by gold/hr (balance price & farmability)
+    by_gold_hr = sorted(results, key=lambda x: x["gold_hr"], reverse=True)
+    top5 = by_gold_hr[:5]
+    top_pick = by_gold_hr[0] if by_gold_hr else None
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:{C['body_bg']};font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:{C['body_bg']};">
+<tr><td align="center" style="padding:0;">
+<table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
+
+  <!-- HEADER BANNER -->
+  <tr><td style="padding:0;position:relative;">
+    <img src="{HEADER_IMG}" width="640" style="width:100%;max-width:640px;height:auto;display:block;border-radius:12px 12px 0 0;" alt="Earthen Dwarves Morning Ore Report">
+  </td></tr>
+
+  <!-- TITLE BAR -->
+  <tr><td style="background:{C['container_bg']};padding:24px 28px 20px 28px;">
+    <p style="color:{C['bright']};font-size:26px;font-weight:700;margin:0 0 4px 0;">Daily Ore Report</p>
+    <p style="color:{C['muted']};font-size:14px;margin:0;">{date_str} &middot; {REALM_DISPLAY} &middot; Source: wowpricehub.com</p>
+  </td></tr>
+
+  <!-- CONTENT -->
+  <tr><td style="background:{C['container_bg']};padding:4px 28px 28px 28px;">
+
+    {_top_pick_card(top_pick) if top_pick else ""}
+
+    {_tier_section("Tier 1 — Premium", "100g+", C['tier1'], tier1)}
+    {_tier_section("Tier 2 — Profitable", "15 – 99g", C['tier2'], tier2)}
+    {_tier_section("Tier 3 — Moderate", "5 – 14g", C['tier3'], tier3)}
+    {_tier_section("Tier 4 — Budget", "Under 5g", C['tier4'], tier4)}
+
+    <!-- TOP 5 FARMING PICKS -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+      <tr><td style="padding:12px 16px;background:{C['accent']};border-radius:8px 8px 0 0;">
+        <span style="color:{C['body_bg']};font-weight:700;font-size:16px;">Top 5 Farming Picks (by Gold/Hr)</span>
+      </td></tr>
+      <tr><td style="padding:8px 0;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          {_farming_tips(top5)}
+        </table>
+      </td></tr>
+    </table>
+
+  </td></tr>
+
+  <!-- FOOTER -->
+  <tr><td style="background:{C['body_bg']};padding:20px 28px;border-top:1px solid {C['card_bg']};">
+    <p style="color:{C['muted']};font-size:12px;margin:0;text-align:center;">
+      Scanned {len(results)} ores across all expansions &middot; Prices are snapshots and may fluctuate<br>
+      Generated by <span style="color:{C['accent']};">arujan-wow-tsm</span> &middot; /ore-scan
+    </p>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>"""
+    return html
+
+
+# ---------------------------------------------------------------------------
+# Send via Outlook
+# ---------------------------------------------------------------------------
+def send_via_outlook(html, subject, to_email):
+    import win32com.client
+    import pythoncom
+    pythoncom.CoInitialize()
+    outlook = win32com.client.Dispatch("Outlook.Application")
+    outlook._FlagAsMethod("CreateItem")
+    mail = outlook.CreateItem(0)
+    mail.To = to_email
+    mail.Subject = subject
+    mail.HTMLBody = html
+    mail.Send()
+    print(f"Email sent to {to_email}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    print("Parsing ore database...")
+    ores = parse_ore_database(ORE_DB_PATH)
+    print(f"Found {len(ores)} ores")
+
+    print(f"Fetching prices from wowpricehub.com ({REALM})...")
+    results = fetch_all_prices(ores, REALM)
+    print(f"Got prices for {len(results)}/{len(ores)} ores")
+
+    if not results:
+        print("ERROR: No prices fetched. Check network or wowpricehub availability.")
+        sys.exit(1)
+
+    date_str = datetime.now().strftime("%B %d, %Y")
+    print("Generating email...")
+    html = generate_html(results, date_str)
+
+    # Also save a local copy for debugging
+    out_path = REPO_ROOT / "scripts" / "last_report.html"
+    out_path.write_text(html, encoding="utf-8")
+    print(f"Saved preview to {out_path}")
+
+    subject = f"Daily Ore Report — {date_str}"
+    print(f"Sending to {EMAIL_TO}...")
+    send_via_outlook(html, subject, EMAIL_TO)
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()

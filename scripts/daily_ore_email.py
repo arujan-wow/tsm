@@ -18,7 +18,7 @@ ORE_DB_PATH = REPO_ROOT / "references" / "ore-database.md"
 REALM = "us/area-52"
 REALM_DISPLAY = "US — Area 52"
 EMAIL_TO = "ian@herzingsmartsheet.consulting"
-HEADER_IMG = "https://raw.githubusercontent.com/arujan-wow/tsm/main/assets/header-banner.png"
+HEADER_IMG = "https://raw.githubusercontent.com/arujan-wow/tsm/main/assets/header-banner.jpg"
 MAX_WORKERS = 6
 
 # ---------------------------------------------------------------------------

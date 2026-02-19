@@ -27,15 +27,16 @@ Scans live auction house prices from [wowpricehub.com](https://wowpricehub.com) 
 - Provides **Top 5 farming picks** with zones, routes, and reasoning
 - Highlights **sleeper picks** with hidden value (transmute targets, prospect upside, low competition)
 
-### Daily Ore Report Email
+### Daily WoW Report Email
 
-Automated daily email delivered at **8:00 AM** with a full market snapshot — no manual scanning required.
+Automated daily email delivered at **8:00 AM** with a full market snapshot — ores, herbs, and WoW Token pricing. No manual scanning required.
 
-- Fetches all ore prices in parallel from wowpricehub.com
-- **"Why" column** on every ore explaining the math and trade-off logic (e.g., "Volume play — massive spawns offset lower price" vs "High unit price but rare — patient farmers only")
-- **Top Pick of the Day** highlight card with gold/hr breakdown
+- Fetches all **ore and herb prices** in parallel from wowpricehub.com (~45 ores + ~88 herbs)
+- **WoW Token** price card with 24h trend and buy/hold/wait signal
+- **"Why" column** on every item explaining the math and trade-off logic (e.g., "Volume play — massive spawns offset lower price" vs "High unit price but rare — patient farmers only")
+- **Top Pick** highlight cards for both ores (blue accent) and herbs (green accent)
 - Tiered ranking tables with farming zones
-- **Top 5 Farming Picks** sorted by actual gold/hr, not just unit price
+- **Top 5 Farming Picks** per category, sorted by actual gold/hr
 - Styled with a WoW-themed dark blue design using Cinzel fantasy fonts
 
 ### TSM Setup Guides
@@ -53,6 +54,7 @@ Automated daily email delivered at **8:00 AM** with a full market snapshot — n
 ## Data
 
 - **[references/ore-database.md](references/ore-database.md)** — Complete ore reference database with item IDs, wowpricehub URL patterns, farming zones, node density estimates, and ore yield data for all expansions
+- **[references/herb-database.md](references/herb-database.md)** — Complete herb reference database with the same format — ~88 herbs across all 12 expansions
 
 ---
 
@@ -72,7 +74,9 @@ The `.claude-plugin/plugin.json` manifest registers the plugin automatically. Th
 
 ### Daily Email (Windows)
 
-The daily ore report runs via Windows Task Scheduler (`\WoW\DailyOreReport`) and sends through Outlook desktop.
+The daily WoW report runs via Windows Task Scheduler (`\WoW\DailyOreReport`) and sends through Outlook desktop.
+
+> **Note:** The scheduled task is still named `DailyOreReport` — renaming Windows scheduled tasks requires manual recreation.
 
 **Requirements:**
 - Python 3.10+ with `requests`, `beautifulsoup4`, `pywin32`

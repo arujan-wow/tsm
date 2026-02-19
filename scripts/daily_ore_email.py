@@ -341,33 +341,34 @@ def _token_price_card(token_data):
     change = token_data.get("change")
     change_pct = token_data.get("change_pct")
 
-    # Buy signal logic
+    # Buy signal logic (perspective: buying token with USD, selling for gold)
+    # Higher gold price = more gold per token = better time to buy
     if change is not None and change_pct is not None:
-        if change_pct <= -3:
+        if change_pct >= 3:
             signal = "Strong Buy"
             signal_color = "#66bb6a"
             signal_icon = "&#9650;&#9650;"  # ▲▲
-            signal_note = f"Down {abs(change_pct):.1f}% in 24h — significant dip, good time to buy."
-        elif change_pct <= -1:
+            signal_note = f"Up {change_pct:.1f}% in 24h — gold value spiking, great time to buy and sell for gold."
+        elif change_pct >= 1:
             signal = "Buy"
             signal_color = "#66bb6a"
             signal_icon = "&#9650;"  # ▲
-            signal_note = f"Down {abs(change_pct):.1f}% in 24h — prices are declining."
-        elif change_pct <= 0:
+            signal_note = f"Up {change_pct:.1f}% in 24h — token yields more gold, good time to buy."
+        elif change_pct >= 0:
             signal = "Neutral"
             signal_color = C["muted"]
             signal_icon = "&#9644;"  # ▬
-            signal_note = "Flat or minor dip — no rush, but fine to buy."
-        elif change_pct <= 2:
+            signal_note = "Flat or minor rise — fine to buy, no rush."
+        elif change_pct >= -2:
             signal = "Hold"
             signal_color = C["tier2"]
             signal_icon = "&#9660;"  # ▼
-            signal_note = f"Up {change_pct:.1f}% in 24h — consider waiting for a dip."
+            signal_note = f"Down {abs(change_pct):.1f}% in 24h — gold value dipping, consider waiting."
         else:
             signal = "Wait"
             signal_color = C["tier1"]
             signal_icon = "&#9660;&#9660;"  # ▼▼
-            signal_note = f"Up {change_pct:.1f}% in 24h — prices are spiking, wait it out."
+            signal_note = f"Down {abs(change_pct):.1f}% in 24h — gold value dropping, wait for recovery."
 
         change_sign = "+" if change > 0 else ""
         change_html = f"""
